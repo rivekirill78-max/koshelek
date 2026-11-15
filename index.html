@@ -147,8 +147,17 @@ h2{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--mute
 /* Budgets / analytics */
 .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px}
 .donut-wrap{display:flex;align-items:center;gap:18px;flex-wrap:wrap}
-.donut{width:160px;height:160px;flex:0 0 auto;max-width:100%}
-.donut text{fill:var(--fg)}
+.donut{width:200px;height:200px;flex:0 0 auto;max-width:100%;margin:0 auto}
+.donut text{fill:var(--fg);font-family:var(--body)}
+.donut text.pct{fill:#fff;font-size:12.5px;font-weight:800;paint-order:stroke;stroke:rgba(0,0,0,.32);stroke-width:2.6px;stroke-linejoin:round}
+.lg .pc b{color:var(--fg);font-weight:800}
+.sumrow{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.sumrow > div{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:10px 12px;display:flex;flex-direction:column;gap:2px;min-width:0}
+.sumrow small{color:var(--muted);font-weight:600;font-size:12px}
+.sumrow b{font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sumrow b.inc{color:var(--inc)} .sumrow b.exp{color:var(--exp)}
+.ratio{display:flex;height:10px;border-radius:6px;overflow:hidden;gap:2px;background:var(--surface-2)}
+.ratio span{display:block;height:100%}
 .legend{flex:1;min-width:180px;display:flex;flex-direction:column;gap:10px}
 .lg{display:grid;grid-template-columns:12px 1fr auto;gap:4px 10px;align-items:center}
 .lg i{width:10px;height:10px;border-radius:3px}
@@ -329,9 +338,10 @@ const DEFAULT_CATS = [
 // RULES FOR UPDATES: never rename the tables (wallets, transactions, debts) or the JSON fields inside
 // their `data` column; only ADD fields, and teach norm*() below to fill them in for older data.
 // Old data must always load in a new version.
-const APP_VERSION = 14;
+const APP_VERSION = 15;
 const SCHEMA = 3;
 const CHANGELOG = [
+  { v: 15, items: ['В «Аналитике» два круга — расходы и доходы по категориям, с процентами прямо на частях круга', 'Сверху — сколько заработали, потратили и какую часть дохода сохранили'] },
   { v: 14, items: ['Кнопка «Учитывать долги» в карточке баланса: показывает, сколько у вас будет, когда все долги вернут и вы вернёте свои'] },
   { v: 13, items: ['Галочка «Не учитывать в статистике» в окне операции: деньги меняют баланс счёта, но не попадают в доходы, расходы, аналитику и бюджеты'] },
   { v: 12, items: ['Валюту можно скрыть: нажмите на неё над списком счетов на «Обзоре» — её счета пропадут из списка и общего баланса. Нажмите ещё раз, чтобы вернуть'] },
@@ -660,21 +670,57 @@ function viewOps() {
 }
 
 function spentByCat(m) { const r = {}; for (const t of inMonth(m)) if (t.type === 'expense' && inStats(t)) r[t.categoryId] = (r[t.categoryId] || 0) + conv(t.amount, accCur(t.accountId)); return r; }
-function donut(parts, total) {
-  const R = 60, C = 2 * Math.PI * R; let off = 0;
-  const arcs = parts.map(p => { const len = p.v / total * C; const gap = parts.length > 1 ? Math.min(2, len / 2) : 0; const s = `<circle r="${R}" cx="80" cy="80" fill="none" stroke="var(--${p.color})" stroke-width="22" stroke-dasharray="${Math.max(0, len - gap)} ${C}" stroke-dashoffset="${-off}" transform="rotate(-90 80 80)"/>`; off += len; return s; }).join('');
-  return `<svg class="donut" viewBox="0 0 160 160" role="img" aria-label="Расходы по категориям"><circle r="${R}" cx="80" cy="80" fill="none" stroke="var(--surface-2)" stroke-width="22"/>${arcs}
-    <text x="80" y="76" text-anchor="middle" font-size="11" font-weight="600" opacity=".7">расходы</text><text x="80" y="94" text-anchor="middle" font-size="15" font-weight="800" font-family="Manrope,system-ui,sans-serif">${esc(fmtShort(total))} ${esc(sym(base()))}</text></svg>`;
+// A share as people read it: never "0%" for something that is there, never "100%" when something else is.
+const share = (v, total) => { const x = v / total * 100; return x > 0 && x < 1 ? '<1' : x > 99 && v < total ? '99' : String(Math.round(x)); };
+function byCat(m, type) { const r = {}; for (const t of inMonth(m)) if (t.type === type && inStats(t)) r[t.categoryId] = (r[t.categoryId] || 0) + conv(t.amount, accCur(t.accountId)); return r; }
+// Ring chart: one arc per category, its share written on the arc when there is room for it (5% and up).
+function donut(parts, total, label) {
+  const CX = 110, R = 78, W = 36, C = 2 * Math.PI * R; let off = 0;
+  const pct = v => share(v, total);
+  const arcs = parts.map(p => {
+    const len = p.v / total * C; const gap = parts.length > 1 ? Math.min(2.5, len / 2) : 0;
+    const arc = `<circle r="${R}" cx="${CX}" cy="${CX}" fill="none" stroke="var(--${p.color})" stroke-width="${W}" stroke-dasharray="${Math.max(0, len - gap)} ${C}" stroke-dashoffset="${-off}" transform="rotate(-90 ${CX} ${CX})"><title>${esc(p.name)}: ${pct(p.v)}% · ${esc(fmt(p.v))}</title></circle>`;
+    let txt = '';
+    if (p.v / total >= 0.05) {
+      const a = ((off + len / 2) / C) * 2 * Math.PI - Math.PI / 2;
+      txt = `<text class="pct" x="${(CX + R * Math.cos(a)).toFixed(1)}" y="${(CX + R * Math.sin(a)).toFixed(1)}" text-anchor="middle" dominant-baseline="central">${pct(p.v)}%</text>`;
+    }
+    off += len; return { arc, txt };
+  });
+  return `<svg class="donut" viewBox="0 0 220 220" role="img" aria-label="${esc(label)} по категориям: ${parts.map(p => esc(p.name) + ' ' + pct(p.v) + '%').join(', ')}">
+    <circle r="${R}" cx="${CX}" cy="${CX}" fill="none" stroke="var(--surface-2)" stroke-width="${W}"/>${arcs.map(x => x.arc).join('')}${arcs.map(x => x.txt).join('')}
+    <text x="${CX}" y="${CX - 9}" text-anchor="middle" font-size="12" font-weight="600" opacity=".7">${esc(label)}</text>
+    <text x="${CX}" y="${CX + 12}" text-anchor="middle" font-size="17" font-weight="800">${esc(fmtShort(total))} ${esc(sym(base()))}</text></svg>`;
 }
+function catBlock(type, m) {
+  const sums = byCat(m, type);
+  const total = Object.values(sums).reduce((a, v) => a + v, 0);
+  const label = type === 'expense' ? 'расходы' : 'доходы';
+  const mon = MONTHS_GEN[+m.slice(5) - 1];
+  if (!total) return `<div class="card"><div class="empty">${type === 'expense' ? 'Расходов' : 'Доходов'} за ${esc(MONTHS[+m.slice(5) - 1].toLowerCase())} пока нет</div></div>`;
+  const parts = Object.entries(sums).map(([id, v]) => { const c = cat(id); return { id, v, name: c?.name || 'Без категории', color: c?.color || 'c9' }; }).sort((a, b) => b.v - a.v);
+  return `<div class="card"><div class="donut-wrap">${donut(parts, total, label)}
+    <div class="legend">${parts.map(p => `<div class="lg"><i style="background:var(--${p.color})"></i><span class="nm">${esc(p.name)}</span><span class="pc num"><b>${share(p.v, total)}%</b> · ${fmt(p.v)}</span></div>`).join('')}</div></div></div>`;
+}
+
 function viewStats() {
   const spent = spentByCat(S.month);
-  const total = Object.values(spent).reduce((s, v) => s + v, 0);
-  const parts = Object.entries(spent).map(([id, v]) => { const c = cat(id); return { id, v, name: c?.name || 'Без категории', color: c?.color || 'c9', budget: c?.budget || 0 }; }).sort((a, b) => b.v - a.v);
+  const { inc, exp } = totals(S.month);
+  const saved = inc - exp; const savedPct = inc > 0 ? Math.round(saved / inc * 100) : null;
+  const monName = esc(MONTHS[+S.month.slice(5) - 1].toLowerCase());
   const months = []; for (let i = 5; i >= 0; i--) months.push(shiftMonth(S.month, -i));
   const ms = months.map(m => ({ m, ...totals(m) })); const max = Math.max(1, ...ms.map(x => Math.max(x.inc, x.exp)));
   const budgeted = S.wallet.categories.filter(c => c.type === 'expense' && c.budget > 0);
-  return `<section class="sec"><h2>Расходы за ${esc(MONTHS[+S.month.slice(5) - 1].toLowerCase())}</h2>
-    <div class="card">${total ? `<div class="donut-wrap">${donut(parts, total)}<div class="legend">${parts.map(p => `<div class="lg"><i style="background:var(--${p.color})"></i><span class="nm">${esc(p.name)}</span><span class="pc num">${fmt(p.v)} · ${Math.round(p.v / total * 100)}%</span></div>`).join('')}</div></div>` : '<div class="empty">В этом месяце расходов нет</div>'}</div></section>
+  return `<section class="sec"><h2>Итог за ${monName}</h2>
+    <div class="sumrow">
+      <div><small>Доходы</small><b class="num inc">+${fmt(inc)}</b></div>
+      <div><small>Расходы</small><b class="num exp">−${fmt(exp)}</b>${inc > 0 ? `<small class="num">${Math.round(exp / inc * 100)}% от доходов</small>` : ''}</div>
+      <div><small>${saved >= 0 ? 'Сохранили' : 'Ушли в минус'}</small><b class="num">${saved >= 0 ? '+' : '−'}${fmt(Math.abs(saved))}</b>${savedPct != null && saved >= 0 ? `<small class="num">${savedPct}% дохода</small>` : ''}</div>
+    </div>
+    ${inc + exp > 0 ? `<div class="ratio" role="img" aria-label="Доходы ${Math.round(inc / (inc + exp) * 100)}%, расходы ${Math.round(exp / (inc + exp) * 100)}%"><span style="width:${inc / (inc + exp) * 100}%;background:var(--inc)"></span><span style="width:${exp / (inc + exp) * 100}%;background:var(--exp)"></span></div>` : ''}
+  </section>
+  <section class="sec"><h2>Расходы за ${monName}</h2>${catBlock('expense', S.month)}</section>
+  <section class="sec"><h2>Доходы за ${monName}</h2>${catBlock('income', S.month)}</section>
   <section class="sec"><h2>Бюджеты</h2><div class="card legend">${budgeted.length ? budgeted.map(c => budgetLine(c, spent[c.id] || 0)).join('') : '<p class="help">Задайте месячный лимит для категорий в «Настройках» — здесь появится, сколько осталось.</p>'}</div></section>
   <section class="sec"><h2>Доходы и расходы за полгода</h2><div class="card">
     <div class="cols">${ms.map(x => `<div class="col ${x.m === S.month ? 'cur' : ''}"><div class="pair"><span title="Доходы ${fmt(x.inc)}" style="height:${x.inc / max * 100}%;background:var(--inc)"></span><span title="Расходы ${fmt(x.exp)}" style="height:${x.exp / max * 100}%;background:var(--exp)"></span></div><small>${MONTHS_SHORT[+x.m.slice(5) - 1]}</small></div>`).join('')}</div>
