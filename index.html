@@ -97,6 +97,9 @@ h2{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--mute
 .acc-plus{position:absolute;top:8px;right:8px;width:30px;height:30px;border-radius:9px;border:0;background:var(--accent-soft);color:var(--accent);font-size:20px;font-weight:700;line-height:1}
 .acc-new{border-style:dashed;background:none;color:var(--accent);align-items:flex-start;justify-content:center;padding-right:14px;min-width:120px;font:inherit}
 .acc-new b{font-size:22px;line-height:1}
+.cur-chips .chip{display:inline-flex;align-items:center;gap:6px}
+.cur-chips .chip[aria-pressed="true"]{background:var(--accent-soft);color:var(--accent);border-color:var(--accent)}
+.cur-chips .chip[aria-pressed="false"]{color:var(--muted);text-decoration:line-through;background:var(--surface)}
 .acc-new small{color:var(--accent)}
 .hero-act{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;position:relative;z-index:1}
 .hero-act button{border:0;border-radius:12px;padding:11px 6px;font-weight:800;font-size:14px;background:var(--accent-fg);color:var(--accent);white-space:nowrap}
@@ -279,6 +282,10 @@ const sym = cur => CURRENCIES[cur]?.[1] || cur;
 const rate = cur => cur === 'KZT' ? 1 : (num(S.wallet?.rates?.[cur]) || CURRENCIES[cur]?.[2] || 1);
 const conv = (n, from, to) => { to = to || base(); return from === to ? n : n * rate(from) / rate(to); };
 const accCur = id => acc(id)?.currency || 'KZT';
+// Hidden currencies: their accounts leave the overview, the total and the account pickers until shown again.
+const isHiddenCur = c => (S.wallet?.hiddenCur || []).includes(c);
+const visibleAccounts = keep => S.wallet.accounts.filter(a => !isHiddenCur(accCur(a.id)) || a.id === keep);
+const walletCurrencies = () => [...new Set(S.wallet.accounts.map(a => accCur(a.id)))];
 const curOptions = sel => Object.entries(CURRENCIES).map(([k, v]) => `<option value="${k}" ${k === sel ? 'selected' : ''}>${k} · ${esc(v[0])}</option>`).join('');
 const fmtShort = n => { const a = Math.abs(n); if (a >= 1e6) return (n / 1e6).toFixed(1).replace('.', ',') + ' млн'; if (a >= 1e4) return Math.round(n / 1e3) + ' тыс'; return Math.round(n).toLocaleString('ru-RU'); };
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -308,9 +315,10 @@ const DEFAULT_CATS = [
 // RULES FOR UPDATES: never rename the tables (wallets, transactions, debts) or the JSON fields inside
 // their `data` column; only ADD fields, and teach norm*() below to fill them in for older data.
 // Old data must always load in a new version.
-const APP_VERSION = 11;
+const APP_VERSION = 12;
 const SCHEMA = 3;
 const CHANGELOG = [
+  { v: 12, items: ['Валюту можно скрыть: нажмите на неё над списком счетов на «Обзоре» — её счета пропадут из списка и общего баланса. Нажмите ещё раз, чтобы вернуть'] },
   { v: 11, items: ['Кошелёк — отдельное приложение: вход по почте, данные на сервере, видны только вам', 'Синхронизация между телефоном и компьютером', 'Без интернета изменения сохраняются на телефоне и отправляются позже'] },
   { v: 10, items: ['Понятное объяснение, где хранятся данные, если кошелёк открыт с чужого аккаунта', 'Проверка, помнит ли телефон кошелёк между запусками — в «Настройках»'] },
   { v: 9, items: ['Данные владельца кошелька сохраняются в аккаунт и на iPhone, даже когда приложение не сообщает, кто вы'] },
@@ -330,6 +338,7 @@ function normWallet(w) {
   out.categories = (Array.isArray(w.categories) ? w.categories : []).filter(c => c && c.id).map((c, i) => ({ ...c, name: c.name || 'Категория', type: c.type === 'income' ? 'income' : 'expense', color: c.color || 'c' + (i % 11 + 1), budget: num(c.budget) }));
   out.base = CURRENCIES[w.base] ? w.base : 'KZT';
   out.rates = w.rates && typeof w.rates === 'object' ? { ...w.rates } : {};
+  out.hiddenCur = Array.isArray(w.hiddenCur) ? w.hiddenCur.filter(c => CURRENCIES[c]) : [];
   return out;
 }
 const normTx = t => ({ ...t, ...(t.toAmount != null ? { toAmount: num(t.toAmount) } : {}), type: ['income', 'expense', 'transfer'].includes(t.type) ? t.type : 'expense', amount: num(t.amount), date: t.date || today() });
@@ -524,8 +533,10 @@ function txList(arr, grouped) {
 }
 
 function viewHome() {
-  const b = balances(); const total = S.wallet.accounts.reduce((s, a) => s + conv(b[a.id], accCur(a.id)), 0);
-  const multi = S.wallet.accounts.some(a => accCur(a.id) !== base());
+  const b = balances(); const shown = visibleAccounts();
+  const total = shown.reduce((s, a) => s + conv(b[a.id], accCur(a.id)), 0);
+  const multi = shown.some(a => accCur(a.id) !== base());
+  const curs = walletCurrencies(); const hidden = curs.filter(isHiddenCur);
   const { inc, exp } = totals(S.month); const diff = inc - exp;
   const recent = sortTx(S.tx).slice(0, 6);
   const news = whatsNew();
@@ -536,7 +547,7 @@ function viewHome() {
   ${news.length ? `<section class="card news" aria-label="Что нового"><div class="sec-h"><h2>Что нового</h2><button class="link" data-seen>Понятно</button></div>
     <ul>${news.flatMap(n => n.items).map(i => `<li>${esc(i)}</li>`).join('')}</ul></section>` : ''}
   <section class="hero">
-    <div><div class="lbl">Всего на счетах${multi ? ', в ' + esc(base()) + ' по вашему курсу' : ''}</div><div class="big num">${fmt(total)}</div></div>
+    <div><div class="lbl">Всего на счетах${multi ? ', в ' + esc(base()) + ' по вашему курсу' : ''}${hidden.length ? ' · без ' + hidden.map(esc).join(', ') : ''}</div><div class="big num">${fmt(total)}</div></div>
     <div class="hero-row">
       <div><small>Доходы, ${MONTHS_SHORT[+S.month.slice(5) - 1]}</small><b class="num">+${fmt(inc)}</b></div>
       <div><small>Расходы</small><b class="num">−${fmt(exp)}</b></div>
@@ -549,7 +560,9 @@ function viewHome() {
     </div>
   </section>
   <section class="sec"><div class="sec-h"><h2>Счета</h2><button class="link" data-goto="settings">Изменить</button></div>
-    <div class="accs">${S.wallet.accounts.map(a => { const c = accCur(a.id); return `<div class="acc"><button class="acc-plus" data-topup="${a.id}" aria-label="Пополнить счёт ${esc(a.name)}">+</button><small>${esc(a.name)}</small><b class="num ${b[a.id] < 0 ? 'neg' : ''}">${fmt(b[a.id], c)}</b>${c !== base() ? `<small class="num">≈ ${fmt(conv(b[a.id], c))}</small>` : ''}</div>`; }).join('')}
+    ${curs.length > 1 ? `<div class="chips cur-chips" role="group" aria-label="Показывать валюты">${curs.map(c => `<button class="chip" data-togglecur="${c}" aria-pressed="${!isHiddenCur(c)}" title="${isHiddenCur(c) ? 'Показать' : 'Скрыть'} ${c}">${isHiddenCur(c) ? '<span aria-hidden="true">◌</span>' : '<span aria-hidden="true">●</span>'} ${esc(sym(c))} ${c}</button>`).join('')}</div>` : ''}
+    ${hidden.length ? `<p class="help">Скрыто: ${hidden.map(c => { const n = S.wallet.accounts.filter(a => accCur(a.id) === c).length; return esc(c) + ' (' + n + ' ' + (n === 1 ? 'счёт' : n < 5 ? 'счёта' : 'счетов') + ')'; }).join(', ')}. Нажмите на валюту, чтобы показать.</p>` : ''}
+    <div class="accs">${shown.map(a => { const c = accCur(a.id); return `<div class="acc"><button class="acc-plus" data-topup="${a.id}" aria-label="Пополнить счёт ${esc(a.name)}">+</button><small>${esc(a.name)}</small><b class="num ${b[a.id] < 0 ? 'neg' : ''}">${fmt(b[a.id], c)}</b>${c !== base() ? `<small class="num">≈ ${fmt(conv(b[a.id], c))}</small>` : ''}</div>`; }).join('')}
       <button class="acc acc-new" data-newacc><b>+</b><small>Новый счёт</small></button></div>
   </section>
   ${debtSummary(true)}
@@ -673,6 +686,7 @@ function currencySection() {
   const usedCur = [...new Set([base(), ...S.wallet.accounts.map(a => accCur(a.id)), ...S.debts.map(debtCur)])].filter(c => c !== 'KZT');
   return `<section class="sec"><h2>Валюты</h2><div class="card" style="display:flex;flex-direction:column;gap:12px">
     <label class="field"><span>Основная валюта — в ней считаются общий баланс, статистика и бюджеты</span><select id="baseCur">${curOptions(base())}</select></label>
+    ${walletCurrencies().length > 1 ? `<div class="field"><span>Показывать на «Обзоре» и при выборе счёта</span><div class="chips cur-chips">${walletCurrencies().map(c => `<button class="chip" data-togglecur="${c}" aria-pressed="${!isHiddenCur(c)}">${isHiddenCur(c) ? '<span aria-hidden="true">◌</span>' : '<span aria-hidden="true">●</span>'} ${esc(sym(c))} ${c}</button>`).join('')}</div></div>` : ''}
     ${usedCur.length ? `<div class="field"><span>Курсы к тенге — укажите актуальные, кошелёк не загружает их сам</span><div class="rows">${usedCur.map(c => `<div class="row rate"><label for="rt-${c}">1 ${esc(c)} =</label><input id="rt-${c}" data-rate="${c}" inputmode="decimal" value="${rate(c)}"><span>₸</span></div>`).join('')}</div></div>`
       : '<p class="help">Все счета в тенге. Чтобы вести деньги в другой валюте, добавьте счёт и выберите для него валюту.</p>'}
   </div></section>`;
@@ -788,7 +802,7 @@ function render() {
 let draft = null;
 function openSheet(tx, preset) {
   const w = S.wallet;
-  draft = tx ? { ...clone(tx), toAmount: tx.toAmount != null ? String(tx.toAmount) : '' } : { id: null, type: 'expense', amount: '', accountId: w.accounts[0]?.id, toAccountId: w.accounts[1]?.id || w.accounts[0]?.id, categoryId: null, date: today(), note: '', toAmount: '', ...(preset || {}) };
+  draft = tx ? { ...clone(tx), toAmount: tx.toAmount != null ? String(tx.toAmount) : '' } : { id: null, type: 'expense', amount: '', accountId: visibleAccounts()[0]?.id || w.accounts[0]?.id, toAccountId: visibleAccounts()[1]?.id || visibleAccounts()[0]?.id || w.accounts[0]?.id, categoryId: null, date: today(), note: '', toAmount: '', ...(preset || {}) };
   if (!tx && preset?.accountId && draft.toAccountId === preset.accountId) draft.toAccountId = w.accounts.find(a => a.id !== preset.accountId)?.id || preset.accountId;
   if (draft.date && !draft.date.startsWith(S.month) && !tx && S.month < today().slice(0, 7)) draft.date = S.month + '-01';
   draft._confirmDel = false;
@@ -798,7 +812,7 @@ function openSheet(tx, preset) {
 function drawSheet() {
   const w = S.wallet, d = draft;
   const segBtn = (k, l) => `<button type="button" data-type="${k}" aria-pressed="${d.type === k}">${l}</button>`;
-  const accOpts = sel => w.accounts.map(a => `<option value="${a.id}" ${a.id === sel ? 'selected' : ''}>${esc(a.name)} · ${esc(sym(accCur(a.id)))}</option>`).join('');
+  const accOpts = sel => visibleAccounts(sel).map(a => `<option value="${a.id}" ${a.id === sel ? 'selected' : ''}>${esc(a.name)} · ${esc(sym(accCur(a.id)))}</option>`).join('');
   const fromCur = accCur(d.accountId), toCur = accCur(d.toAccountId);
   const cross = d.type === 'transfer' && fromCur !== toCur;
   const est = n => { const v = parseAmount(n); return v > 0 ? '≈ ' + fmt(conv(v, fromCur, toCur), toCur) : '0'; };
@@ -831,9 +845,9 @@ const closeSheet = () => { $('#sheetHost').innerHTML = ''; draft = null; ddraft 
 
 // ---------- debt sheets ----------
 let ddraft = null, pdraft = null;
-const accOptions = (sel, withNone, onlyCur) => (withNone ? `<option value="" ${!sel ? 'selected' : ''}>Не учитывать в счетах</option>` : '') + S.wallet.accounts.filter(a => !onlyCur || accCur(a.id) === onlyCur).map(a => `<option value="${a.id}" ${a.id === sel ? 'selected' : ''}>${esc(a.name)} · ${esc(sym(accCur(a.id)))}</option>`).join('');
+const accOptions = (sel, withNone, onlyCur) => (withNone ? `<option value="" ${!sel ? 'selected' : ''}>Не учитывать в счетах</option>` : '') + visibleAccounts(sel).filter(a => !onlyCur || accCur(a.id) === onlyCur).map(a => `<option value="${a.id}" ${a.id === sel ? 'selected' : ''}>${esc(a.name)} · ${esc(sym(accCur(a.id)))}</option>`).join('');
 function openDebt(d) {
-  ddraft = d ? { ...clone(d), amount: String(d.amount), currency: debtCur(d) } : { id: null, dir: 'lent', person: '', amount: '', accountId: S.wallet.accounts[0]?.id || '', currency: accCur(S.wallet.accounts[0]?.id), date: today(), due: '', note: '', payments: [] };
+  ddraft = d ? { ...clone(d), amount: String(d.amount), currency: debtCur(d) } : { id: null, dir: 'lent', person: '', amount: '', accountId: visibleAccounts()[0]?.id || '', currency: accCur(visibleAccounts()[0]?.id || S.wallet.accounts[0]?.id), date: today(), due: '', note: '', payments: [] };
   ddraft._confirmDel = false; drawDebt();
   if (!d) setTimeout(() => $('#d-amount')?.focus(), 60);
 }
@@ -997,6 +1011,12 @@ document.addEventListener('click', async e => {
   if (t.hasAttribute('data-signout')) {
     if (store.queue.length && t.dataset.sure !== '1') { t.dataset.sure = '1'; t.textContent = 'Есть неотправленные изменения — всё равно выйти?'; return; }
     try { await sb.auth.signOut(); } catch (x) {} store.signedOut(); return;
+  }
+  if (t.dataset.togglecur) {
+    const c = t.dataset.togglecur, x = clone(S.wallet), h = new Set(x.hiddenCur || []);
+    if (h.has(c)) h.delete(c); else h.add(c);
+    x.hiddenCur = [...h];
+    return safe(() => store.saveWallet(x), h.has(c) ? 'Скрыто: ' + c : 'Показано: ' + c);
   }
   if (t.dataset.quick) return openSheet(null, { type: t.dataset.quick });
   if (t.dataset.topup) return openSheet(null, { type: 'income', accountId: t.dataset.topup });
