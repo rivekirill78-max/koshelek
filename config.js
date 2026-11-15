@@ -4,6 +4,6 @@
 //   supabaseAnonKey  — ключ «anon» / «publishable». Он публичный и защищён правилами доступа в базе.
 // НИКОГДА не вставляйте сюда ключ «service_role» / «secret» — он даёт полный доступ ко всем данным.
 window.KOSHELEK_CONFIG = {
-  supabaseUrl: '',
-  supabaseAnonKey: ''
+  supabaseUrl: 'https://myvneqqxuzdwjsweuaew.supabase.co',
+  supabaseAnonKey: 'sb_publishable_4QeOQYCZcTU3hTHoR3rOAA_4R8sx3-f'
 };
