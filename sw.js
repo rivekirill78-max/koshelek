@@ -2,7 +2,7 @@
 // Pages and app files: network first (so updates arrive on the next launch), cached copy when offline.
 // Fonts and the Supabase library from CDNs: cached copy first.
 // Requests to Supabase itself are never cached — they carry the person's data.
-const CACHE = 'koshelek-v14';
+const CACHE = 'koshelek-v15';
 const SHELL = ['./', './index.html', './config.js', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png'];
 const CDN_HOSTS = ['cdn.jsdelivr.net', 'fonts.googleapis.com', 'fonts.gstatic.com'];
 

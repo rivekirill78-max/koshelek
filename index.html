@@ -80,6 +80,17 @@ h2{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--mute
 .hero{background:var(--accent);color:var(--accent-fg);border-radius:22px;padding:20px 20px 18px;display:flex;flex-direction:column;gap:16px;position:relative;overflow:hidden}
 .hero::after{content:"";position:absolute;right:-60px;top:-70px;width:220px;height:220px;border-radius:50%;border:28px solid color-mix(in srgb,var(--accent-fg) 10%,transparent);pointer-events:none}
 .hero .lbl{font-size:13px;opacity:.85;font-weight:600}
+.hero-top{display:flex;justify-content:space-between;align-items:center;gap:10px;position:relative;z-index:1;margin-bottom:-12px}
+.hero-top .lbl{min-width:0}
+.hero > .big{position:relative;z-index:1;white-space:nowrap;margin-top:0}
+.hero-toggle{flex:0 0 auto;display:inline-flex;align-items:center;gap:7px;border:0;border-radius:999px;padding:6px 11px 6px 7px;font-weight:700;font-size:12.5px;background:color-mix(in srgb,var(--accent-fg) 16%,transparent);color:var(--accent-fg);white-space:nowrap}
+.hero-toggle .sw{width:26px;height:15px;border-radius:999px;background:color-mix(in srgb,var(--accent-fg) 35%,transparent);position:relative;transition:background .15s}
+.hero-toggle .sw::after{content:"";position:absolute;top:2px;left:2px;width:11px;height:11px;border-radius:50%;background:var(--accent-fg);transition:transform .15s}
+.hero-toggle[aria-pressed="true"]{background:var(--accent-fg);color:var(--accent)}
+.hero-toggle[aria-pressed="true"] .sw{background:var(--accent)}
+.hero-toggle[aria-pressed="true"] .sw::after{transform:translateX(11px);background:var(--accent-fg)}
+@media (prefers-reduced-motion:reduce){.hero-toggle .sw,.hero-toggle .sw::after{transition:none}}
+.hero-debts{font-size:12.5px;font-weight:600;opacity:.9;margin-top:-8px;position:relative;z-index:1}
 .hero .big{font-family:var(--display);font-weight:600;font-size:clamp(30px,9vw,40px);letter-spacing:-.02em;line-height:1.1;margin-top:4px;overflow-wrap:anywhere}
 .hero-row{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;position:relative;z-index:1}
 .hero-row div{background:color-mix(in srgb,var(--accent-fg) 12%,transparent);border-radius:12px;padding:8px 10px;min-width:0}
@@ -318,9 +329,10 @@ const DEFAULT_CATS = [
 // RULES FOR UPDATES: never rename the tables (wallets, transactions, debts) or the JSON fields inside
 // their `data` column; only ADD fields, and teach norm*() below to fill them in for older data.
 // Old data must always load in a new version.
-const APP_VERSION = 13;
+const APP_VERSION = 14;
 const SCHEMA = 3;
 const CHANGELOG = [
+  { v: 14, items: ['Кнопка «Учитывать долги» в карточке баланса: показывает, сколько у вас будет, когда все долги вернут и вы вернёте свои'] },
   { v: 13, items: ['Галочка «Не учитывать в статистике» в окне операции: деньги меняют баланс счёта, но не попадают в доходы, расходы, аналитику и бюджеты'] },
   { v: 12, items: ['Валюту можно скрыть: нажмите на неё над списком счетов на «Обзоре» — её счета пропадут из списка и общего баланса. Нажмите ещё раз, чтобы вернуть'] },
   { v: 11, items: ['Кошелёк — отдельное приложение: вход по почте, данные на сервере, видны только вам', 'Синхронизация между телефоном и компьютером', 'Без интернета изменения сохраняются на телефоне и отправляются позже'] },
@@ -343,6 +355,7 @@ function normWallet(w) {
   out.base = CURRENCIES[w.base] ? w.base : 'KZT';
   out.rates = w.rates && typeof w.rates === 'object' ? { ...w.rates } : {};
   out.hiddenCur = Array.isArray(w.hiddenCur) ? w.hiddenCur.filter(c => CURRENCIES[c]) : [];
+  out.withDebts = !!w.withDebts;
   return out;
 }
 const normTx = t => ({ ...t, ...(t.toAmount != null ? { toAmount: num(t.toAmount) } : {}), type: ['income', 'expense', 'transfer'].includes(t.type) ? t.type : 'expense', amount: num(t.amount), date: t.date || today() });
@@ -543,6 +556,11 @@ function viewHome() {
   const total = shown.reduce((s, a) => s + conv(b[a.id], accCur(a.id)), 0);
   const multi = shown.some(a => accCur(a.id) !== base());
   const curs = walletCurrencies(); const hidden = curs.filter(isHiddenCur);
+  // "With debts": what you would have once everyone settles up — accounts + owed to you − what you owe.
+  const openDebts = activeDebts().filter(d => !isHiddenCur(debtCur(d)));
+  const owedToMe = openDebts.filter(d => d.dir === 'lent').reduce((s2, d) => s2 + conv(debtLeft(d), debtCur(d)), 0);
+  const iOwe = openDebts.filter(d => d.dir === 'borrowed').reduce((s2, d) => s2 + conv(debtLeft(d), debtCur(d)), 0);
+  const withDebts = !!S.wallet.withDebts && openDebts.length > 0;
   const { inc, exp } = totals(S.month); const diff = inc - exp;
   const recent = sortTx(S.tx).slice(0, 6);
   const news = whatsNew();
@@ -553,7 +571,12 @@ function viewHome() {
   ${news.length ? `<section class="card news" aria-label="Что нового"><div class="sec-h"><h2>Что нового</h2><button class="link" data-seen>Понятно</button></div>
     <ul>${news.flatMap(n => n.items).map(i => `<li>${esc(i)}</li>`).join('')}</ul></section>` : ''}
   <section class="hero">
-    <div><div class="lbl">Всего на счетах${multi ? ', в ' + esc(base()) + ' по вашему курсу' : ''}${hidden.length ? ' · без ' + hidden.map(esc).join(', ') : ''}</div><div class="big num">${fmt(total)}</div></div>
+    <div class="hero-top">
+      <div class="lbl">${withDebts ? 'Всего с учётом долгов' : 'Всего на счетах'}${multi ? ', в ' + esc(base()) + ' по вашему курсу' : ''}${hidden.length ? ' · без ' + hidden.map(esc).join(', ') : ''}</div>
+      ${openDebts.length ? `<button class="hero-toggle" data-withdebts aria-pressed="${withDebts}"><span class="sw" aria-hidden="true"></span>Учитывать долги</button>` : ''}
+    </div>
+    <div class="big num">${fmt(withDebts ? total + owedToMe - iOwe : total)}</div>
+    ${withDebts ? `<div class="hero-debts num">На счетах ${fmt(total)}${owedToMe ? ' · вам должны +' + fmt(owedToMe) : ''}${iOwe ? ' · вы должны −' + fmt(iOwe) : ''}</div>` : ''}
     <div class="hero-row">
       <div><small>Доходы, ${MONTHS_SHORT[+S.month.slice(5) - 1]}</small><b class="num">+${fmt(inc)}</b></div>
       <div><small>Расходы</small><b class="num">−${fmt(exp)}</b></div>
@@ -1022,6 +1045,10 @@ document.addEventListener('click', async e => {
   if (t.hasAttribute('data-signout')) {
     if (store.queue.length && t.dataset.sure !== '1') { t.dataset.sure = '1'; t.textContent = 'Есть неотправленные изменения — всё равно выйти?'; return; }
     try { await sb.auth.signOut(); } catch (x) {} store.signedOut(); return;
+  }
+  if (t.hasAttribute('data-withdebts')) {
+    const x = clone(S.wallet); x.withDebts = !x.withDebts;
+    return safe(() => store.saveWallet(x), x.withDebts ? 'Баланс с учётом долгов' : 'Баланс без долгов');
   }
   if (t.dataset.togglecur) {
     const c = t.dataset.togglecur, x = clone(S.wallet), h = new Set(x.hiddenCur || []);
