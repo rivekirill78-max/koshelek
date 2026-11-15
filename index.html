@@ -122,6 +122,9 @@ h2{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--mute
 .tx .t2{font-size:12.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .amt{font-weight:800;white-space:nowrap}
 .amt.income{color:var(--inc)} .amt.transfer{color:var(--trf)}
+.demo.nostat{color:var(--muted)}
+.nostat-check{background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:10px 12px;font-weight:700}
+.nostat-check small{display:block;font-weight:500;color:var(--muted);font-size:12.5px;margin-top:2px}
 .demo{font-size:10.5px;font-weight:800;color:var(--warn);border:1px solid currentColor;border-radius:5px;padding:0 4px;margin-left:6px;vertical-align:1px}
 .empty{padding:28px 18px;text-align:center;color:var(--muted)}
 
@@ -315,9 +318,10 @@ const DEFAULT_CATS = [
 // RULES FOR UPDATES: never rename the tables (wallets, transactions, debts) or the JSON fields inside
 // their `data` column; only ADD fields, and teach norm*() below to fill them in for older data.
 // Old data must always load in a new version.
-const APP_VERSION = 12;
+const APP_VERSION = 13;
 const SCHEMA = 3;
 const CHANGELOG = [
+  { v: 13, items: ['Галочка «Не учитывать в статистике» в окне операции: деньги меняют баланс счёта, но не попадают в доходы, расходы, аналитику и бюджеты'] },
   { v: 12, items: ['Валюту можно скрыть: нажмите на неё над списком счетов на «Обзоре» — её счета пропадут из списка и общего баланса. Нажмите ещё раз, чтобы вернуть'] },
   { v: 11, items: ['Кошелёк — отдельное приложение: вход по почте, данные на сервере, видны только вам', 'Синхронизация между телефоном и компьютером', 'Без интернета изменения сохраняются на телефоне и отправляются позже'] },
   { v: 10, items: ['Понятное объяснение, где хранятся данные, если кошелёк открыт с чужого аккаунта', 'Проверка, помнит ли телефон кошелёк между запусками — в «Настройках»'] },
@@ -506,7 +510,9 @@ const debtLeft = d => Math.round((d.amount - debtPaid(d)) * 100) / 100;
 const activeDebts = () => S.debts.filter(d => debtLeft(d) > 0);
 const debtCur = d => d.currency || (d.accountId && acc(d.accountId) ? accCur(d.accountId) : 'KZT');
 const inMonth = (m) => S.tx.filter(t => t.date && t.date.startsWith(m));
-function totals(m) { let inc = 0, exp = 0; for (const t of inMonth(m)) { const v = conv(t.amount, accCur(t.accountId)); if (t.type === 'income') inc += v; else if (t.type === 'expense') exp += v; } return { inc, exp }; }
+// Operations marked noStats change account balances but stay out of every statistic.
+const inStats = t => !t.noStats;
+function totals(m) { let inc = 0, exp = 0; for (const t of inMonth(m).filter(inStats)) { const v = conv(t.amount, accCur(t.accountId)); if (t.type === 'income') inc += v; else if (t.type === 'expense') exp += v; } return { inc, exp }; }
 const sortTx = arr => arr.slice().sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.createdAt || 0) - (a.createdAt || 0));
 
 // ---------- rendering ----------
@@ -514,17 +520,17 @@ function txRow(t) {
   const c = cat(t.categoryId); const a = acc(t.accountId);
   let title, sub, color, letter, sign;
   if (t.type === 'transfer') { const to = acc(t.toAccountId); title = 'Перевод'; sub = (a?.name || '—') + ' → ' + (to?.name || '—') + (t.toAmount != null && accCur(t.toAccountId) !== accCur(t.accountId) ? ' · получено ' + fmt(t.toAmount, accCur(t.toAccountId)) : ''); color = 'var(--trf)'; letter = '⇄'; sign = ''; }
-  else { title = c?.name || 'Без категории'; sub = a?.name || '—'; color = 'var(--' + (c?.color || 'c9') + ')'; letter = (title[0] || '•').toUpperCase(); sign = t.type === 'income' ? '+' : '−'; }
+  else { title = c?.name || (t.noStats ? (t.type === 'income' ? 'Пополнение' : 'Списание') : 'Без категории'); sub = a?.name || '—'; color = 'var(--' + (c?.color || 'c9') + ')'; letter = (title[0] || '•').toUpperCase(); sign = t.type === 'income' ? '+' : '−'; }
   if (t.note) sub = t.note + ' · ' + sub;
   return `<button class="tx" data-edit="${esc(t.id)}"><span class="ico" style="background:${color}">${esc(letter)}</span>
-    <span class="mid"><span class="t1">${esc(title)}${t.demo ? '<span class="demo">пример</span>' : ''}</span><span class="t2" style="display:block">${esc(sub)}</span></span>
+    <span class="mid"><span class="t1">${esc(title)}${t.demo ? '<span class="demo">пример</span>' : ''}${t.noStats ? '<span class="demo nostat" title="Не учитывается в статистике">вне статистики</span>' : ''}</span><span class="t2" style="display:block">${esc(sub)}</span></span>
     <span class="amt num ${t.type}">${sign}${fmt(t.amount, accCur(t.accountId))}</span></button>`;
 }
 function txList(arr, grouped) {
   if (!arr.length) return '<div class="list"><div class="empty">Операций пока нет. Нажмите «+», чтобы добавить первую.</div></div>';
   if (!grouped) return '<div class="list">' + arr.map(txRow).join('') + '</div>';
   let html = '', cur = null;
-  const dayTotal = d => arr.filter(t => t.date === d).reduce((s, t) => s + conv(t.type === 'expense' ? -t.amount : t.type === 'income' ? t.amount : 0, accCur(t.accountId)), 0);
+  const dayTotal = d => arr.filter(t => t.date === d && inStats(t)).reduce((s, t) => s + conv(t.type === 'expense' ? -t.amount : t.type === 'income' ? t.amount : 0, accCur(t.accountId)), 0);
   for (const t of arr) {
     if (t.date !== cur) { cur = t.date; const dt = dayTotal(cur); html += `<div class="day"><span>${dayLabel(cur)}</span><span class="num">${dt ? (dt > 0 ? '+' : '−') + fmt(Math.abs(dt)) : ''}</span></div>`; }
     html += txRow(t);
@@ -630,7 +636,7 @@ function viewOps() {
   <section class="sec" id="opsList">${arr.length || !q ? txList(sortTx(arr), true) : '<div class="list"><div class="empty">Ничего не нашлось</div></div>'}</section>`;
 }
 
-function spentByCat(m) { const r = {}; for (const t of inMonth(m)) if (t.type === 'expense') r[t.categoryId] = (r[t.categoryId] || 0) + conv(t.amount, accCur(t.accountId)); return r; }
+function spentByCat(m) { const r = {}; for (const t of inMonth(m)) if (t.type === 'expense' && inStats(t)) r[t.categoryId] = (r[t.categoryId] || 0) + conv(t.amount, accCur(t.accountId)); return r; }
 function donut(parts, total) {
   const R = 60, C = 2 * Math.PI * R; let off = 0;
   const arcs = parts.map(p => { const len = p.v / total * C; const gap = parts.length > 1 ? Math.min(2, len / 2) : 0; const s = `<circle r="${R}" cx="80" cy="80" fill="none" stroke="var(--${p.color})" stroke-width="22" stroke-dasharray="${Math.max(0, len - gap)} ${C}" stroke-dashoffset="${-off}" transform="rotate(-90 80 80)"/>`; off += len; return s; }).join('');
@@ -824,7 +830,8 @@ function drawSheet() {
     ${d.type === 'transfer'
       ? `<div class="two"><label class="field"><span>Откуда</span><select id="f-acc">${accOpts(d.accountId)}</select></label><label class="field"><span>Куда</span><select id="f-to">${accOpts(d.toAccountId)}</select></label></div>
          ${cross ? `<label class="field"><span>Поступит на счёт, ${esc(toCur)} — оставьте пустым, чтобы пересчитать по курсу</span><input id="f-toamt" inputmode="decimal" value="${esc(d.toAmount)}" placeholder="${esc(est(d.amount))}"></label>` : ''}`
-      : `<div class="field"><span>Категория</span><div class="cats">${cats.map(c => `<button type="button" data-cat="${c.id}" aria-pressed="${d.categoryId === c.id}"><i style="background:var(--${c.color})"></i>${esc(c.name)}</button>`).join('')}</div></div>
+      : `<label class="check nostat-check"><input type="checkbox" id="f-nostats" ${d.noStats ? 'checked' : ''}> <span>Не учитывать в статистике<small>Баланс счёта изменится, но сумма не попадёт в доходы, расходы, аналитику и бюджеты. Например: накопления, которые уже были, возврат своих денег, исправление остатка.</small></span></label>
+         <div class="field"><span>Категория${d.noStats ? ' — необязательно' : ''}</span><div class="cats">${cats.map(c => `<button type="button" data-cat="${c.id}" aria-pressed="${d.categoryId === c.id}"><i style="background:var(--${c.color})"></i>${esc(c.name)}</button>`).join('')}</div></div>
          <label class="field"><span>Счёт</span><select id="f-acc">${accOpts(d.accountId)}</select></label>`}
     <div class="two"><label class="field"><span>Дата</span><input type="date" id="f-date" value="${esc(d.date)}"></label><label class="field"><span>Комментарий</span><input id="f-note" value="${esc(d.note)}" placeholder="Необязательно"></label></div>
     <p class="err" id="f-err"></p>
@@ -840,6 +847,7 @@ function readSheet() {
   if ($('#f-toamt')) draft.toAmount = $('#f-toamt').value;
   draft.date = $('#f-date')?.value || draft.date;
   draft.note = $('#f-note')?.value ?? draft.note;
+  if ($('#f-nostats')) draft.noStats = $('#f-nostats').checked;
 }
 const closeSheet = () => { $('#sheetHost').innerHTML = ''; draft = null; ddraft = null; pdraft = null; adraft = null; };
 
@@ -941,7 +949,7 @@ async function submitAccount() {
 async function submitSheet() {
   readSheet(); const d = draft; const amount = parseAmount(d.amount); const err = $('#f-err');
   if (!(amount > 0)) { err.textContent = 'Введите сумму больше нуля'; $('#f-amount').focus(); return; }
-  if (d.type !== 'transfer' && !d.categoryId) { err.textContent = 'Выберите категорию'; return; }
+  if (d.type !== 'transfer' && !d.categoryId && !d.noStats) { err.textContent = 'Выберите категорию или отметьте «Не учитывать в статистике»'; return; }
   if (d.type === 'transfer' && d.accountId === d.toAccountId) { err.textContent = 'Выберите два разных счёта'; return; }
   if (!d.date) { err.textContent = 'Укажите дату'; return; }
   const t = { id: d.id || newId(), type: d.type, amount, accountId: d.accountId, date: d.date, note: d.note.trim(), createdAt: d.createdAt || Date.now() };
@@ -953,7 +961,10 @@ async function submitSheet() {
       if (!(got > 0)) { err.textContent = 'Укажите, сколько поступит на счёт'; return; }
       t.toAmount = got;
     }
-  } else t.categoryId = d.categoryId;
+  } else {
+    if (d.categoryId) t.categoryId = d.categoryId;
+    if (d.noStats) t.noStats = true;
+  }
   const isNew = !d.id; closeSheet();
   await safe(() => store.saveTx(t), isNew ? 'Добавлено' : 'Сохранено');
 }
@@ -1026,7 +1037,7 @@ document.addEventListener('click', async e => {
   if (t.dataset.filter) { S.filter = t.dataset.filter; render(); return; }
   // sheet
   if (t.dataset.type && draft) { readSheet(); if (draft.type !== t.dataset.type) { draft.type = t.dataset.type; draft.categoryId = null; } drawSheet(); return; }
-  if (t.dataset.cat && draft) { readSheet(); draft.categoryId = t.dataset.cat; drawSheet(); return; }
+  if (t.dataset.cat && draft) { readSheet(); draft.categoryId = draft.noStats && draft.categoryId === t.dataset.cat ? null : t.dataset.cat; drawSheet(); return; }
   if (t.hasAttribute('data-close')) return closeSheet();
   // debts
   if (t.dataset.debtshow) { S.debtShow = t.dataset.debtshow; render(); return; }
@@ -1067,9 +1078,9 @@ document.addEventListener('click', async e => {
     return;
   }
   if (t.hasAttribute('data-export')) {
-    const rows = [['Дата', 'Тип', 'Сумма', 'Валюта', 'Счёт', 'Счёт получатель', 'Поступило', 'Категория', 'Комментарий']];
+    const rows = [['Дата', 'Тип', 'Сумма', 'Валюта', 'Счёт', 'Счёт получатель', 'Поступило', 'Категория', 'Комментарий', 'В статистике']];
     const tn = { expense: 'Расход', income: 'Доход', transfer: 'Перевод' };
-    for (const x of sortTx(S.tx)) rows.push([x.date, tn[x.type], String(x.amount).replace('.', ','), accCur(x.accountId), acc(x.accountId)?.name || '', acc(x.toAccountId)?.name || '', x.toAmount != null ? String(x.toAmount).replace('.', ',') + ' ' + accCur(x.toAccountId) : '', cat(x.categoryId)?.name || '', x.note || '']);
+    for (const x of sortTx(S.tx)) rows.push([x.date, tn[x.type], String(x.amount).replace('.', ','), accCur(x.accountId), acc(x.accountId)?.name || '', acc(x.toAccountId)?.name || '', x.toAmount != null ? String(x.toAmount).replace('.', ',') + ' ' + accCur(x.toAccountId) : '', cat(x.categoryId)?.name || '', x.note || '', x.noStats ? 'нет' : 'да']);
     const csv = '﻿' + rows.map(r => r.map(v => '"' + String(v).replace(/"/g, '""') + '"').join(';')).join('\r\n');
     try { await saveFile('koshelek-' + today() + '.csv', csv, 'text/csv'); } catch (err) { toast('Не удалось сохранить файл'); }
   }
@@ -1096,6 +1107,7 @@ async function restoreFrom(file) {
 document.addEventListener('change', e => {
   const el = e.target, ds = el.dataset;
   // sheets: a different account can mean a different currency, so redraw
+  if (el.id === 'f-nostats' && draft) { readSheet(); drawSheet(); return; }
   if ((el.id === 'f-acc' || el.id === 'f-to') && draft) { readSheet(); if (el.id === 'f-to' || el.id === 'f-acc') draft.toAmount = ''; drawSheet(); return; }
   if ((el.id === 'd-acc' || el.id === 'd-cur') && ddraft) { readDebt(); drawDebt(); return; }
   if (el.id === 'a-cur' && adraft) { readAccount(); adraft.rate = ''; drawAccount(); return; }
